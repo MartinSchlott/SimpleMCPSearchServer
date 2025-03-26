@@ -1,0 +1,8 @@
+{
+  "name": "simple-search-server",
+  "version": "1.0.0",
+  "apiKeys": {
+    "jina": "YOUR_JINA_API_KEY"
+  },
+  "logLevel": "info"
+} 
