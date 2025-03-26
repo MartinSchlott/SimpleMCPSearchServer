@@ -1,0 +1,81 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# TypeScript AI Coding Guidelines
+
+Guidelines for AI assistants to produce high-quality, maintainable TypeScript code.
+
+## Core Principles
+
+- Read documentation first before making any changes.
+- Make changes file-by-file.
+- Preserve existing code and project structure.
+- Focus only on the changes requested.
+- No inventions - don't add features not explicitly requested.
+- Keep it simple - choose simpler approaches over complex ones.
+
+## Project Structure
+
+- Use modern TypeScript with ESM modules (import/export syntax).
+- Avoid libraries requiring CommonJS (require) or without TypeScript definitions.
+- Use strict TypeScript mode.
+- Never modify configuration files (package.json, tsconfig.json, etc.) without explicit permission.
+- If a bug requires configuration changes, suggest the changes first and wait for approval.
+
+## Code Size Limits
+
+- Keep units small and focused:
+  - Files: less than 200 instructions
+  - Classes: less than 10 public methods/properties 
+  - Functions: maximum 20 instructions
+
+## Naming Conventions
+
+- Use PascalCase for classes.
+- Use camelCase for variables, functions, and methods.
+- Use kebab-case for file and directory names.
+- Start boolean variables with verbs (is, has, can).
+- Start functions with verbs.
+- Avoid abbreviations except for standard ones (API, URL, i, j, err, ctx, req, res).
+- Use descriptive names that clearly communicate purpose.
+
+## Code Quality
+
+- Declare types for all variables and functions.
+- Avoid using 'any' type.
+- Create necessary custom types.
+- Avoid magic numbers - use named constants.
+- Handle edge cases (empty arrays, null values, undefined inputs).
+- Use JSDoc to document public classes and methods.
+- Implement appropriate error handling with clear messages.
+- Follow SOLID principles.
+- Prefer composition over inheritance.
+- Prefer immutability for data.
+- Avoid deep nesting by:
+  - Using early returns for validation
+  - Extracting complex logic into separate functions
+  - Using higher-order functions (map, filter) instead of nested loops
+
+## Dependencies
+
+- Minimize third-party libraries.
+- Each dependency must be justified.
+- Favor standard library solutions when possible.
+
+## Modular Architecture
+
+- Ensure clear separation of concerns.
+- Use well-defined interfaces between components.
+- Components should interact only through their public interfaces.
+- Follow existing project architecture patterns.
+
+## Testing
+
+- Follow the Arrange-Act-Assert convention for tests.
+- Write unit tests for public functions.
+- Use test doubles to simulate dependencies.
+- Name test variables clearly (inputX, mockX, actualX, expectedX).
+
+Remember: When in doubt, choose simplicity and maintainability over complexity and premature optimization.

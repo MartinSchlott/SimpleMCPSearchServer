@@ -1,0 +1,197 @@
+# MCP Server Specification: SimpleSearch
+
+This document specifies an MCP (Model Context Protocol) server implementation that provides search capabilities using Jina.ai APIs.
+
+## Overview
+
+The SimpleSearch MCP server provides three main tools:
+1. `searchWeb` - Search the web for information
+2. `readPage` - Read and convert a webpage to markdown format
+3. `performDeepSearch` - Execute a deep, multi-step search with reasoning
+
+## Configuration
+
+The server should be started with a path to a JSON configuration file:
+
+```
+node dist/index.js /path/to/config.json
+```
+
+### Configuration File Format
+
+```json
+{
+  "name": "simple-search-server",
+  "version": "1.0.0",
+  "apiKeys": {
+    "jina": "jina_YOUR_API_KEY"
+  },
+  "logLevel": "info"
+}
+```
+
+The `apiKeys.jina` value must contain a valid Jina.ai API key.
+
+## Tool Specifications
+
+### Tool: searchWeb
+
+Searches the web for information on a given topic using Jina's search API.
+
+#### Input Schema
+
+```typescript
+interface SearchWebInput {
+  query: string; // The search query
+  site?: string; // Optional: Domain to restrict the search to
+}
+```
+
+#### Response Format
+
+```typescript
+interface SearchWebResponse {
+  code: number;      // HTTP Status Code
+  status: number;    // Jina-specific status code
+  data: Array<{
+    title: string;     // Result title
+    url: string;       // Result URL
+    description: string; // Result description/snippet
+    date?: string;     // Optional: Content date if available
+  }>
+}
+```
+
+#### Implementation Notes
+
+- Endpoint: `https://s.jina.ai/`
+- HTTP Method: GET
+- Required Headers:
+  - `Accept: application/json`
+  - `Authorization: Bearer [JINA_API_KEY]`
+  - `X-Respond-With: no-content`
+- Optional Headers:
+  - `X-Site: [domain]` - If the search should be restricted to a specific domain
+- Query Parameters:
+  - `q` - The search query (URL-encoded)
+- Post-processing:
+  - Remove all `usage` fields from the response data
+  - Remove the `meta` field from the response
+
+### Tool: readPage
+
+Reads a webpage and converts it to markdown format.
+
+#### Input Schema
+
+```typescript
+interface ReadPageInput {
+  url: string; // URL of the webpage to read
+}
+```
+
+#### Response Format
+
+```typescript
+interface ReadPageResponse {
+  code: number;      // HTTP Status Code
+  status: number;    // Jina-specific status code
+  data: {
+    title: string;     // Page title
+    description: string; // Page description (may be empty)
+    url: string;       // Page URL
+    content: string;   // Page content in markdown format
+  }
+}
+```
+
+#### Implementation Notes
+
+- Endpoint: `https://r.jina.ai/[URL]`
+- HTTP Method: GET
+- Required Headers:
+  - `Accept: application/json`
+  - `Authorization: Bearer [JINA_API_KEY]`
+- URL Structure:
+  - The endpoint contains the URL to read directly in the path: `https://r.jina.ai/https://example.com`
+- Post-processing:
+  - Remove the `usage` field from the data object
+  - Remove the `warning` field from the data object
+
+### Tool: performDeepSearch
+
+Performs a deep search on a topic, reading multiple pages and synthesizing information.
+
+#### Input Schema
+
+```typescript
+interface PerformDeepSearchInput {
+  query: string;             // The search query for deep research
+  reasoning_effort?: string; // Optional: Research intensity ("low", "medium", "high")
+  no_direct_answer?: boolean; // Optional: Whether to avoid direct answers
+}
+```
+
+#### Response Format
+
+```typescript
+interface PerformDeepSearchResponse {
+  content: string;           // The answer to the query
+  annotations?: Array<{      // Optional: Source citations
+    type: string;            // Annotation type (e.g., "url_citation")
+    url_citation?: {
+      title: string;         // Source title
+      exactQuote: string;    // Exact quote
+      url: string;           // Source URL
+      dateTime: string;      // Date and time
+    }
+  }>;
+  visitedURLs?: string[];    // Optional: List of URLs visited during research
+  readURLs?: string[];       // Optional: List of URLs read during research
+}
+```
+
+#### Implementation Notes
+
+- Endpoint: `https://deepsearch.jina.ai/v1/chat/completions`
+- HTTP Method: POST
+- Required Headers:
+  - `Content-Type: application/json`
+  - `Authorization: Bearer [JINA_API_KEY]`
+- Request Body Structure:
+  ```json
+  {
+    "model": "jina-deepsearch-v1",
+    "messages": [
+      {
+        "role": "user",
+        "content": "[query]"
+      }
+    ],
+    "stream": true,
+    "reasoning_effort": "[reasoning_effort]",
+    "no_direct_answer": [no_direct_answer]
+  }
+  ```
+- Stream Processing:
+  - The response is returned as a stream of JSON objects
+  - The last chunk contains the complete answer
+  - Progress indicators should be filtered out
+- Post-processing:
+  - Remove the `usage` field from the response
+  - Extract relevant information from the last chunk
+
+## Error Handling
+
+All tools should implement proper error handling:
+
+1. HTTP errors should be handled appropriately
+2. API errors should be extracted from the response and formatted
+3. Error responses should follow the MCP standard format:
+   ```typescript
+   {
+     content: [{ type: "text", text: `Error: ${errorMessage}` }],
+     isError: true
+   }
+   ```
+

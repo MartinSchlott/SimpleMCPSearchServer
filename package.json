@@ -1,0 +1,16 @@
+{
+  "name": "simple-mcp-search-server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node --enable-source-maps dist/index.js",
+    "dev": "ts-node --esm src/index.ts"
+  },
+  "dependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.11.24",
+    "ts-node": "^10.9.2"
+  }
+} 
