@@ -11,9 +11,13 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "*",
     "@types/node": "^20.11.24",
+    "express": "^5.1.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3",
     "zod": "^3.22.4",
     "zod-to-json-schema": "^3.22.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1"
   }
-} 
+}

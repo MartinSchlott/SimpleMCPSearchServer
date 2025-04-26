@@ -1,118 +1,169 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema, CallToolRequest } from '@modelcontextprotocol/sdk/types.js';
-import { zodToJsonSchema } from 'zod-to-json-schema';
-import { loadConfig } from './config.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import express, { Request, Response } from 'express';
+import { z } from 'zod'; // Needed for schema inference if not already imported
+
+import { loadConfig, Config } from './config.js';
 import { JinaClient } from './jina-client.js';
-import { SearchWebSchema, ReadPageSchema, PerformDeepSearchSchema } from './types.js';
+import { SearchWebSchema, ScrapeUrlSchema, PerformDeepSearchSchema } from './types.js'; // Updated import
 
-// Check for config file path
-if (process.argv.length < 3) {
-  console.error('Usage: node dist/index.js <config_file_path>');
-  process.exit(1);
-}
+// --- createMcpServer Function ---
+/**
+ * Creates and configures the MCP server instance.
+ */
+function createMcpServer(config: Config, jinaClient: JinaClient): McpServer {
+  const server = new McpServer({
+    name: config.name,
+    version: config.version,
+  });
 
-const configPath = process.argv[2];
-
-async function runServer() {
-  // Load configuration
-  const config = await loadConfig(configPath);
-  const jinaClient = new JinaClient(config.apiKeys.jina);
-
-  // Initialize server
-  const server = new Server(
-    {
-      name: config.name,
-      version: config.version,
-    },
-    {
-      capabilities: {
-        tools: {},
-      },
+  // Tool: searchWeb
+  server.tool(
+    'searchWeb',
+    SearchWebSchema.shape,
+    async (args: z.infer<typeof SearchWebSchema>) => {
+      const results = await jinaClient.searchWeb(args);
+      return {
+        content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
+      };
     }
   );
 
-  // List available tools
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
-      tools: [
-        {
-          name: 'searchWeb',
-          description: 'Search the web for information using Jina\'s search API.',
-          inputSchema: zodToJsonSchema(SearchWebSchema),
-        },
-        {
-          name: 'readPage',
-          description: 'Read a webpage and convert it to markdown format.',
-          inputSchema: zodToJsonSchema(ReadPageSchema),
-        },
-        {
-          name: 'performDeepSearch',
-          description: 'Perform a deep search on a topic, reading multiple pages and synthesizing information.',
-          inputSchema: zodToJsonSchema(PerformDeepSearchSchema),
-        },
-      ],
-    };
-  });
-
-  // Handle tool calls
-  server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest) => {
-    try {
-      const { name, arguments: args } = request.params;
-
-      switch (name) {
-        case 'searchWeb': {
-          const parsed = SearchWebSchema.safeParse(args);
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments for searchWeb: ${parsed.error}`);
-          }
-          const results = await jinaClient.searchWeb(parsed.data);
-          return {
-            content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
-          };
-        }
-
-        case 'readPage': {
-          const parsed = ReadPageSchema.safeParse(args);
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments for readPage: ${parsed.error}`);
-          }
-          const result = await jinaClient.readPage(parsed.data);
-          return {
-            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-          };
-        }
-
-        case 'performDeepSearch': {
-          const parsed = PerformDeepSearchSchema.safeParse(args);
-          if (!parsed.success) {
-            throw new Error(`Invalid arguments for performDeepSearch: ${parsed.error}`);
-          }
-          const result = await jinaClient.performDeepSearch(parsed.data);
-          return {
-            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-          };
-        }
-
-        default:
-          throw new Error(`Unknown tool: ${name}`);
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+  // Tool: scrapeUrl (formerly readPage)
+  server.tool(
+    'scrapeUrl',
+    ScrapeUrlSchema.shape,
+    async (args: z.infer<typeof ScrapeUrlSchema>) => {
+      const result = await jinaClient.scrapeUrl(args);
       return {
-        content: [{ type: 'text', text: `Error: ${errorMessage}` }],
-        isError: true,
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
+    }
+  );
+
+  // Tool: performDeepSearch
+  server.tool(
+    'performDeepSearch',
+    PerformDeepSearchSchema.shape,
+    async (args: z.infer<typeof PerformDeepSearchSchema>) => {
+      const result = await jinaClient.performDeepSearch(args);
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      };
+    }
+  );
+
+  return server;
+}
+
+// --- runHttpServer Function ---
+async function runHttpServer(config: Config, jinaClient: JinaClient) {
+  const PORT = config.port; // Use port from config
+
+  const app = express();
+  app.use(express.json());
+
+  app.post('/mcp', async (req: Request, res: Response) => {
+    console.log('Received POST /mcp');
+    let server: McpServer | null = null;
+    let transport: StreamableHTTPServerTransport | null = null;
+    try {
+      // Create instances per-request for stateless operation
+      server = createMcpServer(config, jinaClient);
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // Stateless mode
+      });
+
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+
+      res.on('close', () => {
+        console.log('Client connection closed, cleaning up.');
+        transport?.close();
+        server?.close();
+      });
+    } catch (error) {
+      console.error('Error handling MCP request:', error);
+      transport?.close();
+      server?.close();
+      if (!res.headersSent) {
+        const requestId = (req.body as any)?.id ?? null;
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error' },
+          id: requestId,
+        });
+      }
     }
   });
 
-  // Start server
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error(`${config.name} v${config.version} MCP server running on stdio`);
+	// Placeholder for GET - MCP Streamable HTTP doesn't typically use GET for main comms
+	app.get("/mcp", (req: Request, res: Response) => {
+		console.log("Received GET /mcp request (Method Not Allowed)");
+		res.status(405).json({
+			jsonrpc: "2.0",
+			error: { code: -32601, message: "Method not found" }, // Method not found is more accurate than Not Allowed here
+			id: null,
+		});
+	});
+
+	// Placeholder for DELETE - MCP Streamable HTTP doesn't typically use DELETE
+	app.delete("/mcp", (req: Request, res: Response) => {
+		console.log("Received DELETE /mcp request (Method Not Allowed)");
+		res.status(405).json({
+			jsonrpc: "2.0",
+			error: { code: -32601, message: "Method not found" },
+			id: null,
+		});
+	});
+  
+  app.listen(PORT, () => {
+    console.log(`MCP Server (${config.name} v${config.version}) listening on http://localhost:${PORT}/mcp`);
+  });
 }
 
-runServer().catch((error) => {
-  console.error('Fatal error running server:', error);
+// --- runStdioServer Function ---
+async function runStdioServer(config: Config, jinaClient: JinaClient) {
+  console.error(`Starting MCP Server (${config.name} v${config.version}) on stdio...`);
+
+  const server = createMcpServer(config, jinaClient);
+  const transport = new StdioServerTransport();
+
+  await server.connect(transport);
+
+  console.error('MCP Server connected and running via stdio.');
+}
+
+// --- Main Execution Logic ---
+async function main() {
+  // Check for config file path
+  if (process.argv.length < 3) {
+    console.error('Usage: node dist/index.js <config_file_path>');
+    process.exit(1);
+  }
+  const configPath = process.argv[2];
+
+  // Load configuration
+  const config = await loadConfig(configPath);
+  // Pass optional apiKey to JinaClient constructor
+  const jinaClient = new JinaClient(config.apiKeys.jina);
+
+  const transportType = config.transport;
+  console.log(`Attempting to start MCP server with transport: ${transportType}`);
+
+  if (transportType === 'http') {
+    await runHttpServer(config, jinaClient);
+  } else if (transportType === 'stdio') {
+    await runStdioServer(config, jinaClient);
+  } else {
+    // This case should theoretically not be reached due to zod validation+default
+    console.error(`Internal Error: Invalid transport type '${transportType}' detected after config load.`);
+    process.exit(1);
+  }
+}
+
+main().catch((error) => {
+  console.error('Fatal error during server startup:', error);
   process.exit(1);
 }); 

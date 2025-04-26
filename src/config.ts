@@ -8,7 +8,9 @@ export const ConfigSchema = z.object({
   apiKeys: z.object({
     jina: z.string().optional()
   }),
-  logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info')
+  logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  transport: z.enum(['http', 'stdio']).optional().default('http').describe('MCP transport method (http or stdio)'),
+  port: z.number().int().positive().optional().default(3123).describe('Port for HTTP transport')
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
