@@ -43,26 +43,36 @@ Guidelines for AI assistants to produce high-quality, maintainable TypeScript co
 
 ## Code Quality
 
-- Declare types for all variables and functions.
-- Avoid using 'any' type.
-- Create necessary custom types.
-- Avoid magic numbers - use named constants.
+- Declare explicit types for:
+  - Function parameters and return values
+  - Exported variables and constants
+  - Public class members
+- Use type inference for local variables when the inferred type is clear and unambiguous.
+- Avoid using `any`. Prefer precise types or use `unknown` with narrowing.- Create necessary custom types.
+- Avoid magic numbers:
+  - Use named constants for values with domain-specific meaning (e.g., timeouts, thresholds, retry limits).
+  - Allow literals like `0`, `1`, `-1`, and small loop counters unless the meaning is ambiguous.
+  - Prefer descriptive constant names over repeating the same literal in multiple places.
 - Handle edge cases (empty arrays, null values, undefined inputs).
 - Use JSDoc to document public classes and methods.
 - Implement appropriate error handling with clear messages.
 - Follow SOLID principles.
 - Prefer composition over inheritance.
 - Prefer immutability for data.
-- Avoid deep nesting by:
-  - Using early returns for validation
-  - Extracting complex logic into separate functions
-  - Using higher-order functions (map, filter) instead of nested loops
+- Avoid deep nesting by flattening control flow where possible:
+  - Use guard clauses instead of `if/else` when the `if` block ends in `return`, `throw`, or `continue`.
+  - Prefer `return` early to exit invalid conditions before proceeding with main logic.
+  - Extract complex conditional logic into named functions or predicates.
+  - Replace nested loops with higher-order functions like `map`, `filter`, `reduce` where appropriate.
+- Avoid using `continue` in loops unless it clearly improves readability.
+  - Prefer structured control flow with early returns or extracted functions.
+  - If `continue` is used, ensure the loop body remains shallow and predictable.
 
 ## Dependencies
 
 - Minimize third-party libraries.
 - Each dependency must be justified.
-- Favor standard library solutions when possible.
+- Favor standard library solutions when possible (e.g., use native fetch API instead of Axios for HTTP requests).
 
 ## Modular Architecture
 
@@ -79,3 +89,4 @@ Guidelines for AI assistants to produce high-quality, maintainable TypeScript co
 - Name test variables clearly (inputX, mockX, actualX, expectedX).
 
 Remember: When in doubt, choose simplicity and maintainability over complexity and premature optimization.
+Note: This guide does not use code examples. AI agents are expected to infer behavior exclusively from explicit rules and declarative instructions. This encourages structured reasoning over pattern imitation.

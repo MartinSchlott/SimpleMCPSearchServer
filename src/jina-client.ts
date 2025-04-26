@@ -1,9 +1,9 @@
-import type { SearchWebInput, SearchResult, ReadPageInput, ReadPageResult, PerformDeepSearchInput, PerformDeepSearchResult } from './types.js';
+import type { SearchWebInput, SearchResult, ScrapeUrlInput, ScrapeUrlResult, PerformDeepSearchInput, PerformDeepSearchResult } from './types.js';
 
 export class JinaClient {
-  private readonly apiKey: string;
+  private readonly apiKey?: string;
 
-  constructor(apiKey: string) {
+  constructor(apiKey?: string) {
     this.apiKey = apiKey;
   }
 
@@ -13,9 +13,12 @@ export class JinaClient {
 
     const headers: HeadersInit = {
       'Accept': 'application/json',
-      'Authorization': `Bearer ${this.apiKey}`,
       'X-Respond-With': 'no-content'
     };
+
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
 
     if (site) {
       headers['X-Site'] = site;
@@ -35,13 +38,19 @@ export class JinaClient {
     }));
   }
 
-  async readPage({ url }: ReadPageInput): Promise<ReadPageResult> {
+  async scrapeUrl({ url }: ScrapeUrlInput): Promise<ScrapeUrlResult> {
     const apiUrl = `https://r.jina.ai/${encodeURIComponent(url)}`;
+    
+    const headers: HeadersInit = {
+      'Accept': 'application/json'
+    };
+
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+
     const response = await fetch(apiUrl, {
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`
-      }
+      headers: headers
     });
 
     if (!response.ok) {
@@ -58,12 +67,17 @@ export class JinaClient {
   }
 
   async performDeepSearch(input: PerformDeepSearchInput): Promise<PerformDeepSearchResult> {
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json'
+    };
+
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+
     const response = await fetch('https://deepsearch.jina.ai/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`
-      },
+      headers: headers,
       body: JSON.stringify({
         model: 'jina-deepsearch-v1',
         messages: [

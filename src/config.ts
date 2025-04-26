@@ -6,7 +6,7 @@ export const ConfigSchema = z.object({
   name: z.string(),
   version: z.string(),
   apiKeys: z.object({
-    jina: z.string()
+    jina: z.string().optional()
   }),
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info')
 });

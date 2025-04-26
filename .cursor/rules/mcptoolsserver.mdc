@@ -3,349 +3,197 @@ description: This guide provides a concise overview of how to implement an Anthr
 globs: 
 alwaysApply: false
 ---
-# MCP Server Implementation Guide: Tools in TypeScript
+# MCP Server Implementation Guide: Tools via HTTP & stdio
 
-This guide provides a concise overview of how to implement an Anthropic Model Context Protocol (MCP) server that offers tools in TypeScript. It focuses specifically on the core aspects needed to create a functional MCP server without diving into general TypeScript project setup.
+This guide details how to build an Anthropic Model Context Protocol (MCP) server in TypeScript to expose **Tools**. It utilizes the high-level `@modelcontextprotocol/sdk`'s `McpServer` API for simplicity and Zod for robust input schema definition and validation.
 
-## Core Concepts
+It covers two common transport methods:
+1.  **Stateless Streamable HTTP:** For network-accessible servers.
+2.  **stdio:** For direct command-line integration.
 
-The **Model Context Protocol (MCP)** is an open standard that allows AI assistants like Claude to interact with external systems through standardized interfaces. An MCP server can expose:
+**Target Audience:** Proficient AI Coders new to MCP.
 
-- **Resources**: Read-only data (similar to GET endpoints)
-- **Tools**: Functions that perform actions (similar to POST endpoints)
-- **Prompts**: Reusable templates for AI interactions
+## 1. Core Concept: `McpServer` and Tools
 
-This guide focuses specifically on implementing **Tools**.
-
-## Basic MCP Server Structure
-
-Here's the minimal structure for an MCP server that provides tools:
+The `McpServer` class (`@modelcontextprotocol/sdk/server/mcp.js`) provides a streamlined way to define server capabilities. We focus on `server.tool()`.
 
 ```typescript
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ToolSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod"; // For input validation
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod"; // For schema definition
 
-// Define server with metadata
-const server = new Server(
-  {
-    name: "my-tool-server",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {}, // Indicates we'll provide tools
-    },
-  }
-);
-
-// Start the server with stdio transport
-async function runServer() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("MCP server running on stdio");
-}
-
-runServer().catch((error) => {
-  console.error("Fatal error running server:", error);
-  process.exit(1);
-});
-```
-
-## Implementing Tools
-
-There are two key request handlers you need to implement for tools:
-
-1. `ListToolsRequestSchema`: Advertises available tools and their schemas
-2. `CallToolRequestSchema`: Handles actual tool invocations
-
-### Step 1: Define Tool Schemas Using Zod
-
-For each tool, define its input schema using Zod:
-
-```typescript
+// Example: Define input schema for a tool
 const AddNumbersSchema = z.object({
   a: z.number(),
   b: z.number(),
 });
 
-const GetWeatherSchema = z.object({
-  location: z.string(),
-});
-
-// Add more tool schemas as needed
-```
-
-### Step 2: Implement ListTools Handler
-
-This handler returns metadata about all available tools:
-
-```typescript
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      {
-        name: "add_numbers",
-        description: "Add two numbers together and return the result.",
-        inputSchema: zodToJsonSchema(AddNumbersSchema) as ToolInput,
-      },
-      {
-        name: "get_weather",
-        description: "Get the current weather for a location.",
-        inputSchema: zodToJsonSchema(GetWeatherSchema) as ToolInput,
-      },
-      // Define more tools as needed
-    ],
-  };
-});
-```
-
-### Step 3: Implement CallTool Handler
-
-This handler processes actual tool invocations from the AI:
-
-```typescript
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  try {
-    const { name, arguments: args } = request.params;
-
-    switch (name) {
-      case "add_numbers": {
-        const parsed = AddNumbersSchema.safeParse(args);
-        if (!parsed.success) {
-          throw new Error(`Invalid arguments for add_numbers: ${parsed.error}`);
-        }
-        const result = parsed.data.a + parsed.data.b;
-        return {
-          content: [{ type: "text", text: String(result) }],
-        };
-      }
-
-      case "get_weather": {
-        const parsed = GetWeatherSchema.safeParse(args);
-        if (!parsed.success) {
-          throw new Error(`Invalid arguments for get_weather: ${parsed.error}`);
-        }
-        // In a real implementation, you would call a weather API here
-        const weather = `Sunny, 25°C in ${parsed.data.location}`;
-        return {
-          content: [{ type: "text", text: weather }],
-        };
-      }
-
-      default:
-        throw new Error(`Unknown tool: ${name}`);
-    }
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return {
-      content: [{ type: "text", text: `Error: ${errorMessage}` }],
-      isError: true,
-    };
-  }
-});
-```
-
-## Key Patterns for Tool Implementation
-
-When implementing tools, follow these patterns:
-
-1. **Input Validation**: Always validate inputs using Zod schemas
-2. **Error Handling**: Catch and properly format errors
-3. **Response Format**: Return a consistent structure with content array
-4. **Type Safety**: Use TypeScript types to ensure correct implementation
-
-### Tool Response Format
-
-All tool responses should follow this structure:
-
-```typescript
-{
-  content: [{ type: "text", text: string }],
-}
-```
-
-For error responses:
-
-```typescript
-{
-  content: [{ type: "text", text: `Error: ${errorMessage}` }],
-  isError: true,
-}
-```
-
-## Complete MCP Tool Server Example
-
-Here's a complete example of a simple MCP server that provides two tools:
-
-```typescript
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ToolSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
-
-// Type definitions for better TypeScript support
-const ToolInputSchema = ToolSchema.shape.inputSchema;
-type ToolInput = z.infer<typeof ToolInputSchema>;
-
-// Define tool schemas
-const CalculateSchema = z.object({
-  expression: z.string(),
-});
-
-const GenerateRandomSchema = z.object({
-  min: z.number(),
-  max: z.number(),
-});
-
-// Initialize server
-const server = new Server(
-  {
-    name: "simple-math-tools",
+/**
+ * Creates and configures the MCP server instance.
+ * Define all your tools within this function.
+ */
+function createMcpServer(): McpServer {
+  const server = new McpServer({
+    // Basic server metadata
+    name: "my-tool-server",
     version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
-);
+  });
 
-// List available tools
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      {
-        name: "calculate",
-        description: "Evaluate a mathematical expression.",
-        inputSchema: zodToJsonSchema(CalculateSchema) as ToolInput,
-      },
-      {
-        name: "generate_random",
-        description: "Generate a random number between min and max (inclusive).",
-        inputSchema: zodToJsonSchema(GenerateRandomSchema) as ToolInput,
-      },
-    ],
-  };
-});
+  // Define a tool using server.tool()
+  server.tool(
+    "add_numbers",     // Unique tool name
+    AddNumbersSchema,  // Zod schema for input validation
+    async ({ a, b }) => { // Handler receives parsed & validated arguments
+      // --- Tool Logic ---
+      const result = a + b;
+      console.log(`Tool 'add_numbers' executed: ${a} + ${b} = ${result}`);
 
-// Implement tool execution
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  try {
-    const { name, arguments: args } = request.params;
-
-    switch (name) {
-      case "calculate": {
-        const parsed = CalculateSchema.safeParse(args);
-        if (!parsed.success) {
-          throw new Error(`Invalid arguments: ${parsed.error}`);
-        }
-        
-        try {
-          // Simple expression evaluator (unsafe for production!)
-          // In a real app, use a safe math evaluator library
-          const result = eval(parsed.data.expression);
-          return {
-            content: [{ type: "text", text: String(result) }],
-          };
-        } catch (evalError) {
-          throw new Error(`Failed to evaluate expression: ${evalError}`);
-        }
-      }
-
-      case "generate_random": {
-        const parsed = GenerateRandomSchema.safeParse(args);
-        if (!parsed.success) {
-          throw new Error(`Invalid arguments: ${parsed.error}`);
-        }
-        
-        const { min, max } = parsed.data;
-        if (min > max) {
-          throw new Error("Min must be less than or equal to max");
-        }
-        
-        const random = Math.floor(Math.random() * (max - min + 1)) + min;
-        return {
-          content: [{ type: "text", text: String(random) }],
-        };
-      }
-
-      default:
-        throw new Error(`Unknown tool: ${name}`);
+      // --- Return result in MCP format ---
+      // Must return { content: [{ type: "text", text: ... }] }
+      // For errors, return { content: [...], isError: true }
+      return {
+        content: [{ type: "text", text: String(result) }],
+      };
+      // Note: McpServer handles Zod validation errors automatically.
+      // Catch other specific errors within your handler if needed.
     }
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return {
-      content: [{ type: "text", text: `Error: ${errorMessage}` }],
-      isError: true,
-    };
-  }
-});
+  );
 
-// Start server
-async function runServer() {
+  // Define other tools similarly:
+  // server.tool("get_weather", GetWeatherSchema, async ({ location }) => { ... });
+
+  return server;
+}
+```
+
+## 2. Running the Server: Transports
+
+Choose a transport based on `process.env.MCP_TRANSPORT` (`http` or `stdio`).
+
+### Option A: Stateless Streamable HTTP
+
+Uses `express` to handle HTTP requests. Each request gets a new, isolated server and transport instance.
+
+```typescript
+import express from 'express';
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+// Assume createMcpServer is defined as above
+
+async function runHttpServer() {
+  // Get port from environment or use default 3123
+  const PORT = parseInt(process.env.MCP_PORT || '3123', 10);
+
+  const app = express();
+  app.use(express.json()); // Middleware to parse JSON bodies
+
+  // Main MCP endpoint
+  app.post('/mcp', async (req, res) => {
+    console.log("Received POST /mcp");
+    // Create instances per-request for stateless operation
+    let server: McpServer | null = null;
+    let transport: StreamableHTTPServerTransport | null = null;
+    try {
+      server = createMcpServer();
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // Crucial for stateless mode
+      });
+
+      await server.connect(transport); // Connect logic to transport
+      await transport.handleRequest(req, res, req.body); // Process the request
+
+      // Clean up when client closes connection
+      res.on('close', () => {
+        console.log("Client connection closed, cleaning up.");
+        transport?.close();
+        server?.close();
+      });
+    } catch (error) {
+      console.error('Error handling MCP request:', error);
+      // Ensure cleanup even on error
+      transport?.close();
+      server?.close();
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error' },
+          id: (req.body as any)?.id ?? null,
+        });
+      }
+    }
+  });
+
+  // Handle other methods (optional but good practice)
+  app.get('/mcp', (req, res) => res.status(405).send('Method Not Allowed'));
+  app.delete('/mcp', (req, res) => res.status(405).send('Method Not Allowed'));
+
+  app.listen(PORT, () => {
+    console.log(`MCP Server (Stateless HTTP) listening on http://localhost:${PORT}/mcp`);
+  });
+}
+```
+
+### Option B: stdio
+
+For direct command-line interaction (e.g., piping).
+
+```typescript
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+// Assume createMcpServer is defined as above
+
+async function runStdioServer() {
+  console.error("Starting MCP Server on stdio..."); // Logs to stderr
+
+  const server = createMcpServer();
   const transport = new StdioServerTransport();
+
   await server.connect(transport);
-  console.error("Math Tools MCP Server running on stdio");
+
+  console.error("MCP Server connected and running via stdio.");
+  // The server will now listen for MCP JSON-RPC messages on stdin
+  // and send responses/notifications on stdout.
+}
+```
+
+## 3. Main Execution Logic
+
+Combine the above options based on configuration.
+
+```typescript
+// Import necessary modules like express, McpServer, transports, z, etc.
+// Include the createMcpServer function definition.
+// Include runHttpServer and runStdioServer function definitions.
+
+async function main() {
+  // Default to 'http' if MCP_TRANSPORT is not set
+  const transportType = process.env.MCP_TRANSPORT || 'http';
+
+  console.log(`Attempting to start MCP server with transport: ${transportType}`);
+
+  if (transportType === 'http') {
+    await runHttpServer();
+  } else if (transportType === 'stdio') {
+    await runStdioServer();
+  } else {
+    console.error(`Error: Unknown MCP_TRANSPORT specified: '${transportType}'.`);
+    console.error("Please set MCP_TRANSPORT to 'http' or 'stdio'.");
+    process.exit(1);
+  }
 }
 
-runServer().catch((error) => {
-  console.error("Fatal error running server:", error);
+main().catch((error) => {
+  console.error("Fatal error during server startup:", error);
   process.exit(1);
 });
 ```
 
-## Advanced Use Cases
-
-### Async Tool Operations
-
-For tools that perform asynchronous operations:
-
-```typescript
-case "fetch_data": {
-  const parsed = FetchDataSchema.safeParse(args);
-  if (!parsed.success) {
-    throw new Error(`Invalid arguments: ${parsed.error}`);
-  }
-  
-  try {
-    // Example of async operation
-    const response = await fetch(parsed.data.url);
-    const data = await response.json();
-    return {
-      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
-    };
-  } catch (fetchError) {
-    throw new Error(`Failed to fetch data: ${fetchError}`);
-  }
-}
-```
-
-### Additional Considerations
-
-1. **Security**: Always validate inputs and sanitize data, especially when executing dynamic code or accessing system resources
-2. **Performance**: For long-running operations, consider implementing timeouts
-3. **Error Messages**: Provide clear, informative error messages that help the AI understand what went wrong
-
 ## Summary
 
-Creating an MCP server with tools involves:
+1.  Define tool input schemas using **Zod**.
+2.  Create an `McpServer` instance inside a reusable function (`createMcpServer`).
+3.  Define tools on the server instance using `server.tool(name, schema, handler)`.
+4.  Choose **transport**: `StreamableHTTPServerTransport` (stateless) or `StdioServerTransport`.
+5.  Instantiate the chosen transport (configure HTTP port via `MCP_PORT` or default `3123`).
+6.  For HTTP, use `express` and handle requests statelessly (new server/transport per request).
+7.  Connect the server to the transport using `server.connect(transport)`.
+8.  Use `process.env.MCP_TRANSPORT` to select the mode at runtime.
 
-1. Setting up the server with stdio transport
-2. Defining tool schemas using Zod
-3. Implementing the ListTools handler to advertise available tools
-4. Implementing the CallTool handler to execute tool requests
-5. Properly formatting responses and handling errors
-
-This pattern allows AI assistants like Claude to seamlessly integrate with your custom functionality, expanding their capabilities in a secure, standardized way.
+This provides a robust foundation for exposing tools via MCP. Remember to handle errors appropriately within your tool handlers.

@@ -8,12 +8,12 @@ export const SearchWebSchema = z.object({
 
 export type SearchWebInput = z.infer<typeof SearchWebSchema>;
 
-// Read Page Input Schema
-export const ReadPageSchema = z.object({
-  url: z.string().url().describe('URL of the webpage to read')
+// Scrape URL Input Schema (formerly Read Page)
+export const ScrapeUrlSchema = z.object({
+  url: z.string().url().describe('URL of the webpage to scrape')
 });
 
-export type ReadPageInput = z.infer<typeof ReadPageSchema>;
+export type ScrapeUrlInput = z.infer<typeof ScrapeUrlSchema>;
 
 // Deep Search Input Schema
 export const PerformDeepSearchSchema = z.object({
@@ -32,7 +32,7 @@ export interface SearchResult {
   date?: string;
 }
 
-export interface ReadPageResult {
+export interface ScrapeUrlResult { // Formerly ReadPageResult
   title: string;
   description: string;
   url: string;
