@@ -39,10 +39,11 @@ export class JinaClient {
   }
 
   async scrapeUrl({ url }: ScrapeUrlInput): Promise<ScrapeUrlResult> {
+
     const apiUrl = `https://r.jina.ai/${encodeURIComponent(url)}`;
     
     const headers: HeadersInit = {
-      'Accept': 'application/json'
+      'Accept': 'text/plain'
     };
 
     if (this.apiKey) {
@@ -57,12 +58,9 @@ export class JinaClient {
       throw new Error(`Failed to read page: ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data = await response.text();
     return {
-      title: data.title,
-      description: data.description || '',
-      url: data.url,
-      content: data.content
+      content: data
     };
   }
 

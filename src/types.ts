@@ -33,9 +33,6 @@ export interface SearchResult {
 }
 
 export interface ScrapeUrlResult { // Formerly ReadPageResult
-  title: string;
-  description: string;
-  url: string;
   content: string;
 }
 

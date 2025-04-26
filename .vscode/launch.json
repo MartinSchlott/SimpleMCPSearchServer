@@ -6,6 +6,7 @@
       "request": "launch",
       "name": "Debug Program",
       "program": "${workspaceFolder}/dist/index.js",
+      "args": ["${workspaceFolder}/config.json"],
       "sourceMaps": true,
       "preLaunchTask": "npm: build",
       "console": "integratedTerminal",
