@@ -8,7 +8,7 @@ alwaysApply: false
 This guide details how to build an Anthropic Model Context Protocol (MCP) server in TypeScript to expose **Tools**. It utilizes the high-level `@modelcontextprotocol/sdk`'s `McpServer` API for simplicity and Zod for robust input schema definition and validation.
 
 It covers two common transport methods:
-1.  **Stateless Streamable HTTP:** For network-accessible servers.
+1.  **Streamable HTTP:** For network-accessible servers using a persistent server instance.
 2.  **stdio:** For direct command-line integration.
 
 **Target Audience:** Proficient AI Coders new to MCP.
@@ -21,11 +21,17 @@ The `McpServer` class (`@modelcontextprotocol/sdk/server/mcp.js`) provides a str
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod"; // For schema definition
 
-// Example: Define input schema for a tool
+// Define input schema for the 'add_numbers' tool
 const AddNumbersSchema = z.object({
-  a: z.number(),
-  b: z.number(),
+  a: z.number().describe("The first number to add"),
+  b: z.number().describe("The second number to add"),
 });
+
+// Define input schema for the example 'get_weather' tool
+const GetWeatherSchema = z.object({
+    location: z.string().describe("The city and state, e.g. San Francisco, CA"),
+});
+
 
 /**
  * Creates and configures the MCP server instance.
@@ -38,11 +44,12 @@ function createMcpServer(): McpServer {
     version: "1.0.0",
   });
 
-  // Define a tool using server.tool()
+  // Define a tool using server.tool() - passing the .shape of the Zod schema
   server.tool(
-    "add_numbers",     // Unique tool name
-    AddNumbersSchema,  // Zod schema for input validation
-    async ({ a, b }) => { // Handler receives parsed & validated arguments
+    "add_numbers",                     // Unique tool name
+    "Adds two numbers together.",      // Tool description (IMPORTANT for AI)
+    AddNumbersSchema.shape,            // Pass the .shape property of the Zod schema
+    async ({ a, b }) => {              // Handler receives parsed & validated arguments
       // --- Tool Logic ---
       const result = a + b;
       console.log(`Tool 'add_numbers' executed: ${a} + ${b} = ${result}`);
@@ -58,8 +65,20 @@ function createMcpServer(): McpServer {
     }
   );
 
-  // Define other tools similarly:
-  // server.tool("get_weather", GetWeatherSchema, async ({ location }) => { ... });
+  // Define other tools similarly, passing the .shape of their Zod schemas:
+  /*
+  server.tool(
+    "get_weather",
+    "Gets the current weather for a specific location.",
+    GetWeatherSchema.shape,            // Pass the .shape property of the Zod schema
+    async ({ location }) => {
+        // ... implementation ...
+        console.log(`Tool 'get_weather' executed for: ${location}`);
+        const weather = `Weather for ${location} is sunny.`; // Placeholder
+        return { content: [{ type: "text", text: weather }] };
+    }
+  );
+  */
 
   return server;
 }
@@ -69,12 +88,13 @@ function createMcpServer(): McpServer {
 
 Choose a transport based on `process.env.MCP_TRANSPORT` (`http` or `stdio`).
 
-### Option A: Stateless Streamable HTTP
+### Option A: Streamable HTTP (Persistent Instance)
 
-Uses `express` to handle HTTP requests. Each request gets a new, isolated server and transport instance.
+Uses `express` to handle HTTP requests. The `McpServer` and `StreamableHTTPServerTransport` instances are created once and reused for all incoming requests for better performance.
 
 ```typescript
 import express from 'express';
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 // Assume createMcpServer is defined as above
 
@@ -85,49 +105,93 @@ async function runHttpServer() {
   const app = express();
   app.use(express.json()); // Middleware to parse JSON bodies
 
-  // Main MCP endpoint
+  // --- SETUP MCP SERVER AND TRANSPORT ONCE ---
+  console.log("Creating MCP Server and Transport instances...");
+  let server: McpServer | null = null;
+  let transport: StreamableHTTPServerTransport | null = null;
+  try {
+    server = createMcpServer(); // Create the server instance with all tools defined
+    transport = new StreamableHTTPServerTransport({
+      // Use undefined sessionIdGenerator for the basic mode where
+      // the transport itself doesn't manage distinct sessions.
+      // Any session/user state must be handled externally (e.g., via tokens).
+      sessionIdGenerator: undefined,
+    });
+
+    await server.connect(transport); // Connect server logic to the transport
+    console.log("MCP Server connected to transport.");
+
+  } catch (error) {
+    console.error('FATAL: Could not initialize MCP Server or Transport:', error);
+    process.exit(1); // Exit if core setup fails
+  }
+  // ---------------------------------------------
+
+  // Main MCP endpoint - uses the *existing* transport instance
   app.post('/mcp', async (req, res) => {
-    console.log("Received POST /mcp");
-    // Create instances per-request for stateless operation
-    let server: McpServer | null = null;
-    let transport: StreamableHTTPServerTransport | null = null;
+    const requestId = (req.body as any)?.id ?? 'N/A';
+    console.log(`Received POST /mcp (Request ID: ${requestId})`);
+
+    if (!transport || !server) {
+      // Should not happen if setup succeeded, but safety check
+      console.error(`Error handling request ${requestId}: Transport or Server not initialized.`);
+      return res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error: Server components not ready' },
+          id: requestId,
+        });
+    }
+
     try {
-      server = createMcpServer();
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined, // Crucial for stateless mode
-      });
+      // Process the request using the existing, connected transport
+      await transport.handleRequest(req, res, req.body);
+      // transport.handleRequest takes care of sending the response/stream
+      console.log(`Finished handling request ID: ${requestId}`);
 
-      await server.connect(transport); // Connect logic to transport
-      await transport.handleRequest(req, res, req.body); // Process the request
-
-      // Clean up when client closes connection
-      res.on('close', () => {
-        console.log("Client connection closed, cleaning up.");
-        transport?.close();
-        server?.close();
-      });
     } catch (error) {
-      console.error('Error handling MCP request:', error);
-      // Ensure cleanup even on error
-      transport?.close();
-      server?.close();
+      console.error(`Error handling MCP request ID: ${requestId}`, error);
+      // Ensure an error response if handleRequest failed badly and headers aren't sent
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: '2.0',
-          error: { code: -32603, message: 'Internal server error' },
-          id: (req.body as any)?.id ?? null,
+          error: { code: -32603, message: 'Internal server error during request handling' },
+          id: requestId,
         });
       }
+      // Consider if transport needs specific error handling/reset logic here
     }
   });
 
   // Handle other methods (optional but good practice)
-  app.get('/mcp', (req, res) => res.status(405).send('Method Not Allowed'));
-  app.delete('/mcp', (req, res) => res.status(405).send('Method Not Allowed'));
+  app.get('/mcp', (req, res) => { res.status(405).send('Method Not Allowed')});
+  app.delete('/mcp', (req, res) => { res.status(405).send('Method Not Allowed')});
 
-  app.listen(PORT, () => {
-    console.log(`MCP Server (Stateless HTTP) listening on http://localhost:${PORT}/mcp`);
+  // Start listening only after successful server/transport setup
+  const listener = app.listen(PORT, () => {
+    console.log(`MCP Server (HTTP - Persistent Instance) listening on http://localhost:${PORT}/mcp`);
   });
+
+  // Graceful shutdown handling
+  const shutdown = async () => {
+    console.log('Shutdown signal received: closing MCP server and transport.');
+    listener.close(async (err) => {
+        if (err) {
+            console.error("Error closing HTTP server:", err);
+        }
+        try {
+            await transport?.close();
+            await server?.close();
+            console.log('MCP cleanup finished.');
+            process.exit(err ? 1 : 0);
+        } catch (shutdownErr) {
+            console.error("Error during MCP cleanup:", shutdownErr);
+            process.exit(1);
+        }
+    });
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 ```
 
@@ -136,6 +200,7 @@ async function runHttpServer() {
 For direct command-line interaction (e.g., piping).
 
 ```typescript
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 // Assume createMcpServer is defined as above
 
@@ -150,6 +215,22 @@ async function runStdioServer() {
   console.error("MCP Server connected and running via stdio.");
   // The server will now listen for MCP JSON-RPC messages on stdin
   // and send responses/notifications on stdout.
+
+  // Optional: Graceful shutdown for stdio (less common but possible)
+  const shutdownStdio = async () => {
+    console.error('Shutdown signal received: closing MCP server and transport (stdio).');
+     try {
+        await transport?.close(); // StdioTransport might have cleanup
+        await server?.close();
+        console.error('MCP cleanup finished (stdio).');
+        process.exit(0);
+    } catch (shutdownErr) {
+        console.error("Error during MCP cleanup (stdio):", shutdownErr);
+        process.exit(1);
+    }
+  };
+  process.on('SIGTERM', shutdownStdio);
+  process.on('SIGINT', shutdownStdio);
 }
 ```
 
@@ -187,13 +268,13 @@ main().catch((error) => {
 
 ## Summary
 
-1.  Define tool input schemas using **Zod**.
+1.  Define tool input schemas using **Zod**, including `.describe()` for parameters.
 2.  Create an `McpServer` instance inside a reusable function (`createMcpServer`).
-3.  Define tools on the server instance using `server.tool(name, schema, handler)`.
-4.  Choose **transport**: `StreamableHTTPServerTransport` (stateless) or `StdioServerTransport`.
+3.  Define tools on the server instance using `server.tool(name, description, schema, handler)`. **Include a clear `description`** for each tool.
+4.  Choose **transport**: `StreamableHTTPServerTransport` or `StdioServerTransport`.
 5.  Instantiate the chosen transport (configure HTTP port via `MCP_PORT` or default `3123`).
-6.  For HTTP, use `express` and handle requests statelessly (new server/transport per request).
+6.  For HTTP, create the `McpServer` and `StreamableHTTPServerTransport` instances **once** before starting the `express` listener. Use `transport.handleRequest` within the request handler. Implement graceful shutdown. Note that while this pattern is efficient for shared tools, handling complex client-specific state within tools requires careful application-level architecture due to limitations in context injection.
 7.  Connect the server to the transport using `server.connect(transport)`.
 8.  Use `process.env.MCP_TRANSPORT` to select the mode at runtime.
 
-This provides a robust foundation for exposing tools via MCP. Remember to handle errors appropriately within your tool handlers.
+This provides a robust and performant foundation for exposing tools via MCP. Remember to handle errors appropriately within your tool handlers and implement necessary application-level logic (like authentication or detailed state management) around the MCP server.

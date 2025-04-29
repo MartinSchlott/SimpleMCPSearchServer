@@ -21,6 +21,7 @@ function createMcpServer(config: Config, jinaClient: JinaClient): McpServer {
   // Tool: searchWeb
   server.tool(
     'searchWeb',
+    'Search the web for information relevant to the query',
     SearchWebSchema.shape,
     async (args: z.infer<typeof SearchWebSchema>) => {
       const results = await jinaClient.searchWeb(args);
@@ -33,6 +34,7 @@ function createMcpServer(config: Config, jinaClient: JinaClient): McpServer {
   // Tool: scrapeUrl (formerly readPage)
   server.tool(
     'scrapeUrl',
+    'Scrape a webpage for information relevant to the query',
     ScrapeUrlSchema.shape,
     async (args: z.infer<typeof ScrapeUrlSchema>) => {
       const result = await jinaClient.scrapeUrl(args);
@@ -45,6 +47,7 @@ function createMcpServer(config: Config, jinaClient: JinaClient): McpServer {
   // Tool: performDeepSearch
   server.tool(
     'performDeepSearch',
+    'Perform a deep search for information relevant to the query',
     PerformDeepSearchSchema.shape,
     async (args: z.infer<typeof PerformDeepSearchSchema>) => {
       const result = await jinaClient.performDeepSearch(args);
@@ -69,10 +72,9 @@ async function runHttpServer(config: Config, jinaClient: JinaClient) {
     let server: McpServer | null = null;
     let transport: StreamableHTTPServerTransport | null = null;
     try {
-      // Create instances per-request for stateless operation
       server = createMcpServer(config, jinaClient);
       transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined, // Stateless mode
+        sessionIdGenerator: undefined, 
       });
 
       await server.connect(transport);
@@ -107,6 +109,7 @@ async function runHttpServer(config: Config, jinaClient: JinaClient) {
 			id: null,
 		});
 	});
+
 
 	// Placeholder for DELETE - MCP Streamable HTTP doesn't typically use DELETE
 	app.delete("/mcp", (req: Request, res: Response) => {
