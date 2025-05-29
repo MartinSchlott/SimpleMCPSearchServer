@@ -1,12 +1,22 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import express, { Request, Response } from 'express';
-import { z } from 'zod'; // Needed for schema inference if not already imported
+import express, { Request, Response, Router, RequestHandler } from 'express';
+import { z } from 'zod';
 
 import { loadConfig, Config } from './config.js';
 import { JinaClient } from './jina-client.js';
-import { SearchWebSchema, ScrapeUrlSchema, PerformDeepSearchSchema } from './types.js'; // Updated import
+import { 
+  SearchWebSchema, 
+  SearchWebOutputSchema,
+  ScrapeUrlSchema, 
+  ScrapeUrlOutputSchema,
+  PerformDeepSearchSchema, 
+  PerformDeepSearchOutputSchema,
+  SearchWebInput,
+  ScrapeUrlInput,
+  PerformDeepSearchInput
+} from './types.js';
 
 // --- createMcpServer Function ---
 /**
@@ -19,40 +29,70 @@ function createMcpServer(config: Config, jinaClient: JinaClient): McpServer {
   });
 
   // Tool: searchWeb
-  server.tool(
+  server.registerTool(
     'searchWeb',
-    'Search the web for information relevant to the query',
-    SearchWebSchema.shape,
-    async (args: z.infer<typeof SearchWebSchema>) => {
+    {
+      description: 'Search the web for information relevant to the query',
+      inputSchema: SearchWebSchema.shape,
+      outputSchema: SearchWebOutputSchema.shape,
+      annotations: {
+        title: "Web Search",
+        readOnlyHint: true,
+        idempotentHint: false, // Search results can change
+        openWorldHint: true    // Interacts with external search service
+      }
+    },
+    async (args: SearchWebInput) => {
       const results = await jinaClient.searchWeb(args);
       return {
-        content: [{ type: 'text', text: JSON.stringify(results, null, 2) }],
+        content: [], // Empty content array as per manual
+        structuredContent: { results }
       };
     }
   );
 
-  // Tool: scrapeUrl (formerly readPage)
-  server.tool(
+  // Tool: scrapeUrl
+  server.registerTool(
     'scrapeUrl',
-    'Scrape a webpage for information relevant to the query',
-    ScrapeUrlSchema.shape,
-    async (args: z.infer<typeof ScrapeUrlSchema>) => {
+    {
+      description: 'Scrape a webpage for information relevant to the query',
+      inputSchema: ScrapeUrlSchema.shape,
+      outputSchema: ScrapeUrlOutputSchema.shape,
+      annotations: {
+        title: "Web Scraper",
+        readOnlyHint: true,
+        idempotentHint: false, // Content can change
+        openWorldHint: true    // Interacts with external web
+      }
+    },
+    async (args: ScrapeUrlInput) => {
       const result = await jinaClient.scrapeUrl(args);
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        content: [], // Empty content array as per manual
+        structuredContent: result
       };
     }
   );
 
   // Tool: performDeepSearch
-  server.tool(
+  server.registerTool(
     'performDeepSearch',
-    'Perform a deep search for information relevant to the query',
-    PerformDeepSearchSchema.shape,
-    async (args: z.infer<typeof PerformDeepSearchSchema>) => {
+    {
+      description: 'Perform a deep search for information relevant to the query',
+      inputSchema: PerformDeepSearchSchema.shape,
+      outputSchema: PerformDeepSearchOutputSchema.shape,
+      annotations: {
+        title: "Deep Research",
+        readOnlyHint: true,
+        idempotentHint: false, // Results can change
+        openWorldHint: true    // Interacts with external services
+      }
+    },
+    async (args: PerformDeepSearchInput) => {
       const result = await jinaClient.performDeepSearch(args);
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        content: [], // Empty content array as per manual
+        structuredContent: result
       };
     }
   );
@@ -62,68 +102,104 @@ function createMcpServer(config: Config, jinaClient: JinaClient): McpServer {
 
 // --- runHttpServer Function ---
 async function runHttpServer(config: Config, jinaClient: JinaClient) {
-  const PORT = config.port; // Use port from config
+  const PORT = config.port;
 
   const app = express();
   app.use(express.json());
 
-  app.post('/mcp', async (req: Request, res: Response) => {
-    console.log('Received POST /mcp');
-    let server: McpServer | null = null;
-    let transport: StreamableHTTPServerTransport | null = null;
+  // Create persistent instances
+  console.log("Creating MCP Server and Transport instances...");
+  let server: McpServer | null = null;
+  let transport: StreamableHTTPServerTransport | null = null;
+  
+  try {
+    server = createMcpServer(config, jinaClient);
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined
+    });
+
+    await server.connect(transport);
+    console.log("MCP Server connected to transport.");
+  } catch (error) {
+    console.error('FATAL: Could not initialize MCP Server or Transport:', error);
+    process.exit(1);
+  }
+
+  // Create router for MCP endpoints
+  const router = Router();
+
+  // Main MCP endpoint
+  const handleMcpRequest: RequestHandler = async (req, res) => {
+    const requestId = (req.body as any)?.id ?? 'N/A';
+    console.log(`Received POST /mcp (Request ID: ${requestId})`);
+
+    if (!transport || !server) {
+      console.error(`Error handling request ${requestId}: Transport or Server not initialized.`);
+      res.status(500).json({
+        jsonrpc: '2.0',
+        error: { code: -32603, message: 'Internal server error: Server components not ready' },
+        id: requestId
+      });
+      return;
+    }
+
     try {
-      server = createMcpServer(config, jinaClient);
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined, 
-      });
-
-      await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
-
-      res.on('close', () => {
-        console.log('Client connection closed, cleaning up.');
-        transport?.close();
-        server?.close();
-      });
+      console.log(`Finished handling request ID: ${requestId}`);
     } catch (error) {
-      console.error('Error handling MCP request:', error);
-      transport?.close();
-      server?.close();
+      console.error(`Error handling MCP request ID: ${requestId}`, error);
       if (!res.headersSent) {
-        const requestId = (req.body as any)?.id ?? null;
         res.status(500).json({
           jsonrpc: '2.0',
-          error: { code: -32603, message: 'Internal server error' },
-          id: requestId,
+          error: { code: -32603, message: 'Internal server error during request handling' },
+          id: requestId
         });
       }
     }
-  });
+  };
 
-	// Placeholder for GET - MCP Streamable HTTP doesn't typically use GET for main comms
-	app.get("/mcp", (req: Request, res: Response) => {
-		console.log("Received GET /mcp request (Method Not Allowed)");
-		res.status(405).json({
-			jsonrpc: "2.0",
-			error: { code: -32601, message: "Method not found" }, // Method not found is more accurate than Not Allowed here
-			id: null,
-		});
-	});
+  // Handle other methods
+  const handleMethodNotAllowed: RequestHandler = (_req, res) => {
+    res.status(405).json({
+      jsonrpc: '2.0',
+      error: { code: -32601, message: 'Method not found' },
+      id: null
+    });
+  };
 
+  router.post('/', handleMcpRequest);
+  router.get('/', handleMethodNotAllowed);
+  router.delete('/', handleMethodNotAllowed);
 
-	// Placeholder for DELETE - MCP Streamable HTTP doesn't typically use DELETE
-	app.delete("/mcp", (req: Request, res: Response) => {
-		console.log("Received DELETE /mcp request (Method Not Allowed)");
-		res.status(405).json({
-			jsonrpc: "2.0",
-			error: { code: -32601, message: "Method not found" },
-			id: null,
-		});
-	});
-  
-  app.listen(PORT, () => {
+  // Mount the router
+  app.use('/mcp', router);
+
+  // Start listening
+  const listener = app.listen(PORT, () => {
     console.log(`MCP Server (${config.name} v${config.version}) listening on http://localhost:${PORT}/mcp`);
   });
+
+  // Graceful shutdown handling
+  const shutdown = async () => {
+    console.log('Shutdown signal received: closing MCP server and transport.');
+    listener.close(async (err) => {
+      if (err) {
+        console.error("Error closing HTTP server:", err);
+      }
+      try {
+        await transport?.close();
+        await server?.close();
+        console.log('MCP cleanup finished.');
+        process.exit(err ? 1 : 0);
+      } catch (shutdownErr) {
+        console.error("Error during MCP cleanup:", shutdownErr);
+        process.exit(1);
+      }
+    });
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 // --- runStdioServer Function ---
@@ -136,6 +212,23 @@ async function runStdioServer(config: Config, jinaClient: JinaClient) {
   await server.connect(transport);
 
   console.error('MCP Server connected and running via stdio.');
+
+  // Optional: Graceful shutdown for stdio
+  const shutdownStdio = async () => {
+    console.error('Shutdown signal received: closing MCP server and transport (stdio).');
+    try {
+      await transport?.close();
+      await server?.close();
+      console.error('MCP cleanup finished (stdio).');
+      process.exit(0);
+    } catch (shutdownErr) {
+      console.error("Error during MCP cleanup (stdio):", shutdownErr);
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGTERM', shutdownStdio);
+  process.on('SIGINT', shutdownStdio);
 }
 
 // --- Main Execution Logic ---
@@ -149,7 +242,6 @@ async function main() {
 
   // Load configuration
   const config = await loadConfig(configPath);
-  // Pass optional apiKey to JinaClient constructor
   const jinaClient = new JinaClient(config.apiKeys.jina);
 
   const transportType = config.transport;
@@ -160,7 +252,6 @@ async function main() {
   } else if (transportType === 'stdio') {
     await runStdioServer(config, jinaClient);
   } else {
-    // This case should theoretically not be reached due to zod validation+default
     console.error(`Internal Error: Invalid transport type '${transportType}' detected after config load.`);
     process.exit(1);
   }

@@ -9,7 +9,7 @@
     "dev": "ts-node --esm src/index.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "*",
+    "@modelcontextprotocol/sdk": "^1.12.0",
     "@types/node": "^20.11.24",
     "express": "^5.1.0",
     "ts-node": "^10.9.2",

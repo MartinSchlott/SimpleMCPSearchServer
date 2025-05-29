@@ -7,6 +7,8 @@ alwaysApply: false
 
 This guide details how to build an Anthropic Model Context Protocol (MCP) server in TypeScript to expose **Tools**. It utilizes the high-level `@modelcontextprotocol/sdk`'s `McpServer` API for simplicity and Zod for robust input schema definition and validation.
 
+Updated for MCP Specification 2025-03-26 with tool annotations and output schemas.
+
 It covers two common transport methods:
 1.  **Streamable HTTP:** For network-accessible servers using a persistent server instance.
 2.  **stdio:** For direct command-line integration.
@@ -15,23 +17,36 @@ It covers two common transport methods:
 
 ## 1. Core Concept: `McpServer` and Tools
 
-The `McpServer` class (`@modelcontextprotocol/sdk/server/mcp.js`) provides a streamlined way to define server capabilities. We focus on `server.tool()`.
+The `McpServer` class (`@modelcontextprotocol/sdk/server/mcp.js`) provides a streamlined way to define server capabilities. We focus on `server.tool()` with input schemas, output schemas, and tool annotations.
 
 ```typescript
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod"; // For schema definition
 
 // Define input schema for the 'add_numbers' tool
-const AddNumbersSchema = z.object({
+const AddNumbersInputSchema = z.object({
   a: z.number().describe("The first number to add"),
   b: z.number().describe("The second number to add"),
 });
 
-// Define input schema for the example 'get_weather' tool
-const GetWeatherSchema = z.object({
+// Define output schema for the 'add_numbers' tool
+const AddNumbersOutputSchema = z.object({
+  result: z.number().describe("The sum of the two numbers"),
+  operation: z.string().describe("Description of the operation performed"),
+});
+
+// Define input schema for the 'get_weather' tool
+const GetWeatherInputSchema = z.object({
     location: z.string().describe("The city and state, e.g. San Francisco, CA"),
 });
 
+// Define output schema for the 'get_weather' tool
+const GetWeatherOutputSchema = z.object({
+    location: z.string().describe("The location queried"),
+    temperature: z.number().describe("Temperature in Celsius"),
+    conditions: z.string().describe("Weather conditions"),
+    humidity: z.number().describe("Humidity percentage"),
+});
 
 /**
  * Creates and configures the MCP server instance.
@@ -44,41 +59,59 @@ function createMcpServer(): McpServer {
     version: "1.0.0",
   });
 
-  // Define a tool using server.tool() - passing the .shape of the Zod schema
-  server.tool(
-    "add_numbers",                     // Unique tool name
-    "Adds two numbers together.",      // Tool description (IMPORTANT for AI)
-    AddNumbersSchema.shape,            // Pass the .shape property of the Zod schema
-    async ({ a, b }) => {              // Handler receives parsed & validated arguments
-      // --- Tool Logic ---
-      const result = a + b;
-      console.log(`Tool 'add_numbers' executed: ${a} + ${b} = ${result}`);
-
-      // --- Return result in MCP format ---
-      // Must return { content: [{ type: "text", text: ... }] }
-      // For errors, return { content: [...], isError: true }
-      return {
-        content: [{ type: "text", text: String(result) }],
-      };
-      // Note: McpServer handles Zod validation errors automatically.
-      // Catch other specific errors within your handler if needed.
+  // Define a tool with input schema, output schema, and annotations
+  server.registerTool("add_numbers", {
+    description: "Adds two numbers together.",
+    inputSchema: AddNumbersInputSchema.shape,   // Input schema
+    outputSchema: AddNumbersOutputSchema.shape, // Output schema
+    annotations: {
+      title: "Number Addition Calculator",      // Human-readable title for UI
+      readOnlyHint: true,                      // Tool doesn't modify environment
+      idempotentHint: true,                    // Same input = same output
+      openWorldHint: false,                    // Doesn't interact with external services
     }
-  );
+  }, async ({ a, b }) => {                     // Handler receives parsed & validated arguments
+    // --- Tool Logic ---
+    const result = a + b;
+    console.log(`Tool 'add_numbers' executed: ${a} + ${b} = ${result}`);
 
-  // Define other tools similarly, passing the .shape of their Zod schemas:
-  /*
-  server.tool(
-    "get_weather",
-    "Gets the current weather for a specific location.",
-    GetWeatherSchema.shape,            // Pass the .shape property of the Zod schema
-    async ({ location }) => {
-        // ... implementation ...
-        console.log(`Tool 'get_weather' executed for: ${location}`);
-        const weather = `Weather for ${location} is sunny.`; // Placeholder
-        return { content: [{ type: "text", text: weather }] };
+    // --- Return structured result matching output schema ---
+    return {
+      content: [],  // Empty content array to minimize network overhead
+      structuredContent: {
+        result: result,
+        operation: `Added ${a} and ${b}`
+      }
+    };
+  });
+
+  // Example tool with external interaction
+  server.registerTool("get_weather", {
+    description: "Gets the current weather for a specific location.",
+    inputSchema: GetWeatherInputSchema.shape,
+    outputSchema: GetWeatherOutputSchema.shape,
+    annotations: {
+      title: "Weather Information",
+      readOnlyHint: true,                      // Read-only data fetch
+      idempotentHint: false,                   // Weather can change
+      openWorldHint: true,                     // Interacts with external weather API
     }
-  );
-  */
+  }, async ({ location }) => {
+    console.log(`Tool 'get_weather' executed for: ${location}`);
+    
+    // Simulate API call or database query
+    const weatherData = {
+        location: location,
+        temperature: 22,
+        conditions: "sunny",
+        humidity: 65
+    };
+    
+    return { 
+      content: [],  // Empty content array to minimize network overhead
+      structuredContent: weatherData
+    };
+  });
 
   return server;
 }
@@ -268,13 +301,29 @@ main().catch((error) => {
 
 ## Summary
 
-1.  Define tool input schemas using **Zod**, including `.describe()` for parameters.
+1.  Define tool input and output schemas using **Zod**, including `.describe()` for all parameters and fields.
 2.  Create an `McpServer` instance inside a reusable function (`createMcpServer`).
-3.  Define tools on the server instance using `server.tool(name, description, schema, handler)`. **Include a clear `description`** for each tool.
-4.  Choose **transport**: `StreamableHTTPServerTransport` or `StdioServerTransport`.
-5.  Instantiate the chosen transport (configure HTTP port via `MCP_PORT` or default `3123`).
-6.  For HTTP, create the `McpServer` and `StreamableHTTPServerTransport` instances **once** before starting the `express` listener. Use `transport.handleRequest` within the request handler. Implement graceful shutdown. Note that while this pattern is efficient for shared tools, handling complex client-specific state within tools requires careful application-level architecture due to limitations in context injection.
-7.  Connect the server to the transport using `server.connect(transport)`.
-8.  Use `process.env.MCP_TRANSPORT` to select the mode at runtime.
+3.  Define tools on the server instance using `server.registerTool(name, config, handler)`. **Include clear descriptions** for all tools and schemas.
+4.  **Always provide output schemas** - Tools must define structured response formats for proper client integration.
+5.  **Tool handlers must return `structuredContent` and `content`** - `structuredContent` contains the structured data matching the output schema. Use empty `content: []` array to minimize network overhead.
+6.  **Use tool annotations** to provide metadata about tool behavior (readOnlyHint, idempotentHint, openWorldHint).
+7.  Choose **transport**: `StreamableHTTPServerTransport` or `StdioServerTransport`.
+8.  Instantiate the chosen transport (configure HTTP port via `MCP_PORT` or default `3123`).
+9.  For HTTP, create the `McpServer` and `StreamableHTTPServerTransport` instances **once** before starting the `express` listener. Use `transport.handleRequest` within the request handler. Implement graceful shutdown.
+10. Connect the server to the transport using `server.connect(transport)`.
+11. Use `process.env.MCP_TRANSPORT` to select the mode at runtime.
 
-This provides a robust and performant foundation for exposing tools via MCP. Remember to handle errors appropriately within your tool handlers and implement necessary application-level logic (like authentication or detailed state management) around the MCP server.
+**Tool Response Format:**
+```typescript
+return {
+  content: [],  // Empty array to minimize network overhead
+  structuredContent: outputSchemaData  // Structured data matching output schema
+};
+```
+
+**Tool Annotations (Spec 2025-03-26):**
+- `readOnlyHint`: Tool doesn't modify its environment
+- `idempotentHint`: Calling with same args has no additional effect 
+- `openWorldHint`: Tool interacts with external entities/services
+
+This provides a robust and performant foundation for exposing tools via MCP with structured responses and proper type safety. Remember to handle errors appropriately within your tool handlers and implement necessary application-level logic around the MCP server.
